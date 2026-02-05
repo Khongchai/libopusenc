@@ -875,8 +875,14 @@ void ope_encoder_destroy(OggOpusEnc *enc) {
 
 /* Ends the stream and create a new stream within the same file. */
 int ope_encoder_chain_current(OggOpusEnc *enc, OggOpusComments *comments) {
-  enc->last_stream->close_at_end = 0;
-  return ope_encoder_continue_new_callbacks(enc, enc->last_stream->user_data, comments);
+  EncStream *prev_stream = enc->last_stream;
+  int ret = ope_encoder_continue_new_callbacks(enc, prev_stream->user_data, comments);
+  if (ret != OPE_OK) return ret;
+  prev_stream->close_at_end = 0;
+  if (!prev_stream->serialno_is_set) stream_generate_serialno(prev_stream);
+  enc->last_stream->serialno = (int)((unsigned int)prev_stream->serialno + 1);
+  enc->last_stream->serialno_is_set = 1;
+  return OPE_OK;
 }
 
 /* Ends the stream and create a new file. */
