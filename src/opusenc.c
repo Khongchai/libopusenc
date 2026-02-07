@@ -658,8 +658,8 @@ static void encode_buffer(OggOpusEnc *enc) {
       }
       if (e_o_s) {
         EncStream *tmp;
-        tmp = enc->streams->next;
         if (enc->streams->close_at_end && !enc->pull_api) {
+          enc->streams->close_at_end = 0;
           ret = enc->callbacks.close(enc->streams->user_data);
           if (ret) {
             enc->unrecoverable = OPE_CLOSE_FAIL;
@@ -667,10 +667,11 @@ static void encode_buffer(OggOpusEnc *enc) {
             return;
           }
         }
+        tmp = enc->streams->next;
         stream_destroy(enc->streams);
         enc->streams = tmp;
-        if (!tmp) enc->last_stream = NULL;
-        if (enc->last_stream == NULL) {
+        if (!tmp) {
+          enc->last_stream = NULL;
           free(packet_copy);
           return;
         }
@@ -682,6 +683,10 @@ static void encode_buffer(OggOpusEnc *enc) {
           enc->streams->granule_offset -= enc->frame_size;
         }
         init_stream(enc);
+        if (enc->unrecoverable) {
+          free(packet_copy);
+          return;
+        }
         if (enc->chaining_keyframe) {
           unsigned char *p;
           opus_int64 granulepos2=enc->curr_granule - enc->streams->granule_offset - enc->frame_size;
