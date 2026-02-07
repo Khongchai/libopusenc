@@ -926,10 +926,12 @@ int ope_encoder_continue_new_callbacks(OggOpusEnc *enc, void *user_data, OggOpus
 
 int ope_encoder_flush_header(OggOpusEnc *enc) {
   if (enc->unrecoverable) return enc->unrecoverable;
-  if (enc->last_stream->header_is_frozen) return OPE_TOO_LATE;
-  if (enc->last_stream->stream_is_init) return OPE_TOO_LATE;
-  else init_stream(enc);
-  return OPE_OK;
+  /* With chained streams, this function only ensures that the initial
+     headers have been written.  Headers for additional chained streams
+     will be written as soon as we have enough audio to close out the
+     previous stream in the chain, or when the chain is drained. */
+  if (enc->streams != NULL && !enc->streams->stream_is_init) init_stream(enc);
+  return enc->unrecoverable;
 }
 
 /* Goes straight to the libopus ctl() functions. */
