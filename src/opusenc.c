@@ -529,6 +529,7 @@ static void init_stream(OggOpusEnc *enc) {
     oggp_set_muxing_delay(enc->oggp, enc->max_ogg_delay);
   }
   opeint_comment_pad(&enc->streams->comment, &enc->streams->comment_length, enc->comment_padding);
+  enc->streams->header_is_frozen = 1;
 
   /* Get preskip at the last minute (when it can no longer change). */
   if (enc->global_granule_offset == -1) {
