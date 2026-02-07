@@ -108,6 +108,45 @@ AS_IF([test "$enable_fixed_point" = "yes"],
   ]
 )
 
+# prefer arc4random for random numbers if it is defined in the C library;
+# otherwise fall back on other alternatives
+AC_CHECK_FUNCS([arc4random],,[
+  AC_CHECK_HEADERS([sys/random.h])
+  AC_MSG_CHECKING([for getentropy])
+  AC_LINK_IFELSE([AC_LANG_PROGRAM([[
+      #include <unistd.h>
+      #ifdef HAVE_SYS_RANDOM_H
+      #include <sys/random.h>
+      #endif
+    ]], [[
+      char c;
+      return getentropy(&c, 1);
+    ]])
+  ], [
+    AC_MSG_RESULT([yes])
+    AC_DEFINE([HAVE_GETENTROPY], [1], [Enable use of getentropy function])
+  ], [
+    AC_MSG_RESULT([no])
+    AC_MSG_CHECKING([for getrandom])
+    AC_LINK_IFELSE([AC_LANG_PROGRAM([[
+        #include <unistd.h>
+        #ifdef HAVE_SYS_RANDOM_H
+        #include <sys/random.h>
+        #endif
+      ]], [[
+        char c;
+        return (int)getrandom(&c, 1, GRND_NONBLOCK);
+      ]])
+    ], [
+      AC_MSG_RESULT([yes])
+      AC_DEFINE([HAVE_GETRANDOM], [1], [Enable use of getrandom function])
+    ], [
+      AC_MSG_RESULT([no])
+    ])
+  ])
+])
+AC_CHECK_FUNCS([clock_gettime])
+
 AC_ARG_ENABLE([examples],
   AS_HELP_STRING([--disable-examples], [Do not build example applications]),,
   enable_examples=yes)

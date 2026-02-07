@@ -23,6 +23,7 @@ libopusenc_la_SOURCES = \
 	src/opus_header.c \
 	src/opusenc.c \
 	src/picture.c \
+	src/random.c \
 	src/resample.c \
 	src/unicode_support.c
 libopusenc_la_LIBADD = $(DEPS_LIBS) $(lrintf_lib)

@@ -357,7 +357,7 @@ fail:
 }
 
 static void stream_generate_serialno(EncStream *stream) {
-  stream->serialno = rand();
+  stream->serialno = (int)get_random_uint32();
   stream->serialno_is_set = 1;
 }
 
