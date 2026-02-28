@@ -680,8 +680,9 @@ static void encode_buffer(OggOpusEnc *enc) {
         enc->header.preskip = end_granule + enc->frame_size - enc->curr_granule;
         enc->streams->granule_offset = enc->curr_granule - enc->frame_size;
         if (enc->chaining_keyframe) {
-          enc->header.preskip += enc->frame_size;
-          enc->streams->granule_offset -= enc->frame_size;
+          int duration = opus_packet_get_nb_samples(enc->chaining_keyframe, enc->chaining_keyframe_length, 48000);
+          enc->header.preskip += duration;
+          enc->streams->granule_offset -= duration;
         }
         init_stream(enc);
         if (enc->unrecoverable) {
