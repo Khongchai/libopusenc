@@ -172,7 +172,7 @@ struct EncStream {
   int seen_file_icons;
   int close_at_end;
   int header_is_frozen;
-  opus_int64 end_granule;
+  opus_int64 end_sample;
   opus_int64 granule_offset;
   EncStream *next;
 };
@@ -260,7 +260,7 @@ struct OggOpusEnc {
   int max_ogg_delay;
   int global_granule_offset;
   opus_int64 curr_granule;
-  opus_int64 write_granule;
+  opus_int64 write_sample;
   opus_int64 last_page_granule;
   int draining;
   int frame_size_request;
@@ -438,7 +438,7 @@ static OggOpusEnc *ope_encoder_create_callbacks_impl(const OpusEncCallbacks *cal
   }
   enc->global_granule_offset = -1;
   enc->curr_granule = 0;
-  enc->write_granule = 0;
+  enc->write_sample = 0;
   enc->last_page_granule = 0;
   enc->draining = 0;
   if ( (enc->buffer = malloc(sizeof(*enc->buffer)*BUFFER_SAMPLES*channels)) == NULL) goto fail;
@@ -456,7 +456,7 @@ static OggOpusEnc *ope_encoder_create_callbacks_impl(const OpusEncCallbacks *cal
     enc->pull_api = 1;
   }
   enc->streams->user_data = user_data;
-  enc->streams->end_granule = 0;
+  enc->streams->end_sample = 0;
   if (error) *error = OPE_OK;
   return enc;
 fail:
@@ -588,7 +588,7 @@ static int compute_frame_samples(int size_request) {
 static void encode_buffer(OggOpusEnc *enc) {
   opus_int32 max_packet_size;
   /* Round up when converting the granule pos because the decoder will round down. */
-  opus_int64 end_granule48k = (enc->streams->end_granule*48000 + enc->rate - 1)/enc->rate + enc->global_granule_offset;
+  opus_int64 end_granule = (enc->streams->end_sample*48000 + enc->rate - 1)/enc->rate + enc->global_granule_offset;
   max_packet_size = (1277*6+2)*enc->header.nb_streams;
   while (enc->buffer_end-enc->buffer_start > enc->frame_size + enc->decision_delay) {
     int cont;
@@ -602,16 +602,16 @@ static void encode_buffer(OggOpusEnc *enc) {
     opeint_encoder_ctl(&enc->st, OPUS_GET_PREDICTION_DISABLED(&pred));
     /* FIXME: a frame that follows a keyframe generally doesn't need to be a keyframe
        unless there's two consecutive stream boundaries. */
-    if (enc->curr_granule + 2*enc->frame_size>= end_granule48k && enc->streams->next) {
+    if (enc->curr_granule + 2*enc->frame_size>= end_granule && enc->streams->next) {
       opeint_encoder_ctl(&enc->st, OPUS_SET_PREDICTION_DISABLED(1));
       is_keyframe = 1;
     }
     /* Handle the last packet by making sure not to encode too much padding. */
-    if (enc->curr_granule+enc->frame_size >= end_granule48k && enc->draining && enc->frame_size_request > OPUS_FRAMESIZE_20_MS) {
+    if (enc->curr_granule+enc->frame_size >= end_granule && enc->draining && enc->frame_size_request > OPUS_FRAMESIZE_20_MS) {
       int min_samples;
       int frame_size_request = OPUS_FRAMESIZE_20_MS;
       /* Minimum frame size required for the current frame to still meet the e_o_s condition. */
-      min_samples = end_granule48k - enc->curr_granule;
+      min_samples = end_granule - enc->curr_granule;
       while (compute_frame_samples(frame_size_request) < min_samples) frame_size_request++;
       assert(frame_size_request <= enc->frame_size_request);
       ope_encoder_ctl(enc, OPUS_SET_EXPERT_FRAME_DURATION(frame_size_request));
@@ -631,9 +631,9 @@ static void encode_buffer(OggOpusEnc *enc) {
       int ret;
       opus_int64 granulepos;
       granulepos=enc->curr_granule-enc->streams->granule_offset;
-      e_o_s=enc->curr_granule >= end_granule48k;
+      e_o_s=enc->curr_granule >= end_granule;
       cont = 0;
-      if (e_o_s) granulepos=end_granule48k-enc->streams->granule_offset;
+      if (e_o_s) granulepos=end_granule-enc->streams->granule_offset;
       if (packet_copy != NULL) {
         packet = oggp_get_packet_buffer(enc->oggp, max_packet_size);
         memcpy(packet, packet_copy, nbBytes);
@@ -677,7 +677,7 @@ static void encode_buffer(OggOpusEnc *enc) {
           return;
         }
         /* We're done with this stream, start the next one. */
-        enc->header.preskip = end_granule48k + enc->frame_size - enc->curr_granule;
+        enc->header.preskip = end_granule + enc->frame_size - enc->curr_granule;
         enc->streams->granule_offset = enc->curr_granule - enc->frame_size;
         if (enc->chaining_keyframe) {
           enc->header.preskip += enc->frame_size;
@@ -696,7 +696,7 @@ static void encode_buffer(OggOpusEnc *enc) {
           if (enc->packet_callback) enc->packet_callback(enc->packet_callback_data, enc->chaining_keyframe, enc->chaining_keyframe_length, 0);
           oggp_commit_packet(enc->oggp, enc->chaining_keyframe_length, granulepos2, 0);
         }
-        end_granule48k = (enc->streams->end_granule*48000 + enc->rate - 1)/enc->rate + enc->global_granule_offset;
+        end_granule = (enc->streams->end_sample*48000 + enc->rate - 1)/enc->rate + enc->global_granule_offset;
         cont = 1;
       }
     } while (cont);
@@ -728,8 +728,8 @@ int ope_encoder_write_float(OggOpusEnc *enc, const float *pcm, int samples_per_c
   enc->last_stream->header_is_frozen = 1;
   if (!enc->streams->stream_is_init) init_stream(enc);
   if (samples_per_channel < 0) return OPE_BAD_ARG;
-  enc->write_granule += samples_per_channel;
-  enc->last_stream->end_granule = enc->write_granule;
+  enc->write_sample += samples_per_channel;
+  enc->last_stream->end_sample = enc->write_sample;
   if (enc->lpc_buffer) {
     int i;
     if (samples_per_channel < LPC_INPUT) {
@@ -773,8 +773,8 @@ int ope_encoder_write(OggOpusEnc *enc, const opus_int16 *pcm, int samples_per_ch
   enc->last_stream->header_is_frozen = 1;
   if (!enc->streams->stream_is_init) init_stream(enc);
   if (samples_per_channel < 0) return OPE_BAD_ARG;
-  enc->write_granule += samples_per_channel;
-  enc->last_stream->end_granule = enc->write_granule;
+  enc->write_sample += samples_per_channel;
+  enc->last_stream->end_sample = enc->write_sample;
   if (enc->lpc_buffer) {
     int i;
     if (samples_per_channel < LPC_INPUT) {
@@ -920,7 +920,7 @@ int ope_encoder_continue_new_callbacks(OggOpusEnc *enc, void *user_data, OggOpus
   new_stream = stream_create(comments);
   if (!new_stream) return OPE_ALLOC_FAIL;
   new_stream->user_data = user_data;
-  new_stream->end_granule = enc->write_granule;
+  new_stream->end_sample = enc->write_sample;
   enc->last_stream->next = new_stream;
   enc->last_stream = new_stream;
   return OPE_OK;
