@@ -59,6 +59,8 @@
 
 #define BUFFER_SAMPLES (MAX_LOOKAHEAD + BUFFER_EXTRA)
 
+#define OVERLAP_LIMIT 3840  /* 80ms */
+
 #define MIN(a,b) ((a) < (b) ? (a) : (b))
 #define MAX(a,b) ((a) > (b) ? (a) : (b))
 
@@ -585,10 +587,15 @@ static int compute_frame_samples(int size_request) {
   else return (size_request-OPUS_FRAMESIZE_2_5_MS-2)*960;
 }
 
+static opus_int64 compute_end_granule(OggOpusEnc *enc, EncStream *stream) {
+  /* Round up when converting the granule pos because the decoder will round down. */
+  return (stream->end_sample*48000 + enc->rate - 1)/enc->rate + enc->global_granule_offset;
+
+}
+
 static void encode_buffer(OggOpusEnc *enc) {
   opus_int32 max_packet_size;
-  /* Round up when converting the granule pos because the decoder will round down. */
-  opus_int64 end_granule = (enc->streams->end_sample*48000 + enc->rate - 1)/enc->rate + enc->global_granule_offset;
+  opus_int64 end_granule = compute_end_granule(enc, enc->streams);
   max_packet_size = (1277*6+2)*enc->header.nb_streams;
   while (enc->buffer_end-enc->buffer_start > enc->frame_size + enc->decision_delay) {
     int cont;
@@ -600,17 +607,28 @@ static void encode_buffer(OggOpusEnc *enc) {
     int is_keyframe=0;
     if (enc->unrecoverable) return;
     opeint_encoder_ctl(&enc->st, OPUS_GET_PREDICTION_DISABLED(&pred));
-    /* FIXME: a frame that follows a keyframe generally doesn't need to be a keyframe
-       unless there's two consecutive stream boundaries. */
-    if (enc->curr_granule + 2*enc->frame_size>= end_granule && enc->streams->next) {
-      opeint_encoder_ctl(&enc->st, OPUS_SET_PREDICTION_DISABLED(1));
-      is_keyframe = 1;
+    /* Make this a keyframe if we are going to want to reuse it as the first
+       packet of another stream. */
+    if (enc->streams->next) {
+      EncStream *la_stream = enc->streams;
+      opus_int64 la_end_granule = end_granule;
+      int min_overlap = MIN(enc->frame_size + 1, OVERLAP_LIMIT);
+      while (enc->curr_granule + enc->frame_size + min_overlap > la_end_granule) {
+        if (!enc->chaining_keyframe || enc->curr_granule + min_overlap <= la_end_granule) {
+          opeint_encoder_ctl(&enc->st, OPUS_SET_PREDICTION_DISABLED(1));
+          is_keyframe = 1;
+          break;
+        }
+        la_stream = la_stream->next;
+        if (!la_stream->next) break;
+        la_end_granule = compute_end_granule(enc, la_stream);
+      }
     }
     /* If this will be the last packet for the last stream and it would be
        larger than 20ms, reduce the size to the smallest multiple of 20ms that
        is still large enough to be the last packet for the last stream. */
     if (enc->draining && enc->frame_size_request > OPUS_FRAMESIZE_20_MS) {
-      opus_int64 last_granule = (enc->last_stream->end_sample*48000 + enc->rate - 1)/enc->rate + enc->global_granule_offset;
+      opus_int64 last_granule = compute_end_granule(enc, enc->last_stream);
       if (enc->curr_granule + enc->frame_size >= last_granule) {
         int min_samples = last_granule - enc->curr_granule;
         int frame_size_request = OPUS_FRAMESIZE_20_MS;
@@ -683,9 +701,16 @@ static void encode_buffer(OggOpusEnc *enc) {
         enc->header.preskip = end_granule + enc->frame_size - enc->curr_granule;
         enc->streams->granule_offset = enc->curr_granule - enc->frame_size;
         if (enc->chaining_keyframe) {
-          int duration = opus_packet_get_nb_samples(enc->chaining_keyframe, enc->chaining_keyframe_length, 48000);
-          enc->header.preskip += duration;
-          enc->streams->granule_offset -= duration;
+          if (enc->header.preskip >= OVERLAP_LIMIT) {
+            /* Current packet provides enough overlap; no need for previous one. */
+            free(enc->chaining_keyframe);
+            enc->chaining_keyframe = NULL;
+          } else {
+            /* Repeat the previous packet in addition to the current one. */
+            int duration = opus_packet_get_nb_samples(enc->chaining_keyframe, enc->chaining_keyframe_length, 48000);
+            enc->header.preskip += duration;
+            enc->streams->granule_offset -= duration;
+          }
         }
         init_stream(enc);
         if (enc->unrecoverable) {
@@ -700,7 +725,7 @@ static void encode_buffer(OggOpusEnc *enc) {
           if (enc->packet_callback) enc->packet_callback(enc->packet_callback_data, enc->chaining_keyframe, enc->chaining_keyframe_length, 0);
           oggp_commit_packet(enc->oggp, enc->chaining_keyframe_length, granulepos2, 0);
         }
-        end_granule = (enc->streams->end_sample*48000 + enc->rate - 1)/enc->rate + enc->global_granule_offset;
+        end_granule = compute_end_granule(enc, enc->streams);
         cont = 1;
       }
     } while (cont);
