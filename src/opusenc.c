@@ -606,15 +606,18 @@ static void encode_buffer(OggOpusEnc *enc) {
       opeint_encoder_ctl(&enc->st, OPUS_SET_PREDICTION_DISABLED(1));
       is_keyframe = 1;
     }
-    /* Handle the last packet by making sure not to encode too much padding. */
-    if (enc->curr_granule+enc->frame_size >= end_granule && enc->draining && enc->frame_size_request > OPUS_FRAMESIZE_20_MS) {
-      int min_samples;
-      int frame_size_request = OPUS_FRAMESIZE_20_MS;
-      /* Minimum frame size required for the current frame to still meet the e_o_s condition. */
-      min_samples = end_granule - enc->curr_granule;
-      while (compute_frame_samples(frame_size_request) < min_samples) frame_size_request++;
-      assert(frame_size_request <= enc->frame_size_request);
-      ope_encoder_ctl(enc, OPUS_SET_EXPERT_FRAME_DURATION(frame_size_request));
+    /* If this will be the last packet for the last stream and it would be
+       larger than 20ms, reduce the size to the smallest multiple of 20ms that
+       is still large enough to be the last packet for the last stream. */
+    if (enc->draining && enc->frame_size_request > OPUS_FRAMESIZE_20_MS) {
+      opus_int64 last_granule = (enc->last_stream->end_sample*48000 + enc->rate - 1)/enc->rate + enc->global_granule_offset;
+      if (enc->curr_granule + enc->frame_size >= last_granule) {
+        int min_samples = last_granule - enc->curr_granule;
+        int frame_size_request = OPUS_FRAMESIZE_20_MS;
+        while (compute_frame_samples(frame_size_request) < min_samples) frame_size_request++;
+        assert(frame_size_request <= enc->frame_size_request);
+        ope_encoder_ctl(enc, OPUS_SET_EXPERT_FRAME_DURATION(frame_size_request));
+      }
     }
     packet = oggp_get_packet_buffer(enc->oggp, max_packet_size);
     nbBytes = opeint_encode_float(&enc->st, &enc->buffer[enc->channels*enc->buffer_start],
