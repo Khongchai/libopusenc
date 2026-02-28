@@ -724,6 +724,7 @@ static void encode_buffer(OggOpusEnc *enc) {
 int ope_encoder_write_float(OggOpusEnc *enc, const float *pcm, int samples_per_channel) {
   int channels = enc->channels;
   if (enc->unrecoverable) return enc->unrecoverable;
+  if (enc->last_stream == NULL) return OPE_TOO_LATE;
   enc->last_stream->header_is_frozen = 1;
   if (!enc->streams->stream_is_init) init_stream(enc);
   if (samples_per_channel < 0) return OPE_BAD_ARG;
@@ -768,6 +769,7 @@ int ope_encoder_write_float(OggOpusEnc *enc, const float *pcm, int samples_per_c
 int ope_encoder_write(OggOpusEnc *enc, const opus_int16 *pcm, int samples_per_channel) {
   int channels = enc->channels;
   if (enc->unrecoverable) return enc->unrecoverable;
+  if (enc->last_stream == NULL) return OPE_TOO_LATE;
   enc->last_stream->header_is_frozen = 1;
   if (!enc->streams->stream_is_init) init_stream(enc);
   if (samples_per_channel < 0) return OPE_BAD_ARG;
@@ -813,7 +815,7 @@ int ope_encoder_write(OggOpusEnc *enc, const opus_int16 *pcm, int samples_per_ch
 /* Get the next page from the stream. Returns 1 if there is a page available, 0 if not. */
 int ope_encoder_get_page(OggOpusEnc *enc, unsigned char **page, opus_int32 *len, int flush) {
   if (enc->unrecoverable) return enc->unrecoverable;
-  if (!enc->pull_api) return 0;
+  if (!enc->pull_api || enc->oggp == NULL) return 0;
   else {
     if (flush) oggp_flush_page(enc->oggp);
     return oggp_get_next_page(enc->oggp, page, len);
@@ -882,6 +884,7 @@ void ope_encoder_destroy(OggOpusEnc *enc) {
 /* Ends the stream and create a new stream within the same file. */
 int ope_encoder_chain_current(OggOpusEnc *enc, OggOpusComments *comments) {
   EncStream *prev_stream = enc->last_stream;
+  if (prev_stream == NULL) return OPE_TOO_LATE;
   int ret = ope_encoder_continue_new_callbacks(enc, prev_stream->user_data, comments);
   if (ret != OPE_OK) return ret;
   prev_stream->close_at_end = 0;
@@ -913,8 +916,7 @@ int ope_encoder_continue_new_file(OggOpusEnc *enc, const char *path, OggOpusComm
 int ope_encoder_continue_new_callbacks(OggOpusEnc *enc, void *user_data, OggOpusComments *comments) {
   EncStream *new_stream;
   if (enc->unrecoverable) return enc->unrecoverable;
-  assert(enc->streams);
-  assert(enc->last_stream);
+  if (enc->last_stream == NULL) return OPE_TOO_LATE;
   new_stream = stream_create(comments);
   if (!new_stream) return OPE_ALLOC_FAIL;
   new_stream->user_data = user_data;
